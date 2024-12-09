@@ -1,6 +1,7 @@
 import ky from 'ky'
 import chatPage from '../pages/chat.html?raw'
 import { updateNavbar } from './navbar.js'
+import { showAlert } from './utils'
 import '../css/chat.css'
 
 export async function chat(client) {
@@ -14,6 +15,7 @@ export async function chat(client) {
   const getProfileButton = document.getElementById('profile-user')
   const inviteToGameButton = document.getElementById('invite-game')
   let selectedFriendId = null
+  let tournament = null
   let senderNickname = null
   let selectedFriendNickname = null
   const friendNicknameToId = new Map()
@@ -28,14 +30,28 @@ export async function chat(client) {
       headers: { Authorization: `Bearer ${client.token}` },
       credentials: 'include',
     }).json()
+    const hasUpcomingGames = await ky.get(`https://pong.api.transcendence.fr/player/${client.id}/upcoming-game/`, {
+      headers: { Authorization: `Bearer ${client.token}` },
+      credentials: 'include',
+    }).json()
+    console.error('hasUpcomingGames:', hasUpcomingGames)
+    if (hasUpcomingGames && hasUpcomingGames.has_upcoming_game) {
+      tournament = {
+        nickname: 'Tournament',
+        message: 'Hello, this is a kind reminder to attend your tournament game',
+      }
+    }
+    else {
+      tournament = null
+    }
     friends.forEach((friend) => {
       friendNicknameToId.set(friend.nickname, friend.id)
       friendIdToNickname.set(friend.id, friend.nickname)
     })
-    renderFriends(friends, conversations)
+    renderFriends(friends, conversations, tournament) // ADD tournament
   }
 
-  function renderFriends(friends, conversations) {
+  function renderFriends(friends, conversations, tournament) {
     friendsList.innerHTML = ''
     friends.forEach((friend) => {
       const conversationWithUnreadMsg = conversations.find(conv => (conv.user1.id === client.id && conv.user2.id === friend.id
@@ -51,6 +67,14 @@ export async function chat(client) {
       client.router.addEvent(li, 'click', () => selectConversation(friend))
       friendsList.appendChild(li)
     })
+    // Render the "Tournament" friend
+    if (tournament) {
+      const li = document.createElement('li')
+      li.textContent = tournament.nickname
+      li.style.color = 'red'
+      client.router.addEvent(li, 'click', () => selectConversation(tournament))
+      friendsList.appendChild(li)
+    }
   }
   await loadFriends()
 
@@ -58,6 +82,12 @@ export async function chat(client) {
     if (client.socket) {
       client.socket.close()
       client.socket = null
+    }
+    if (friend.nickname === 'Tournament') {
+      renderMessages([{ sentFromUser: { nickname: 'Tournament' }, messageContent: friend.message }], 'Tournament')
+      updateFrontendReadStatus(friend.nickname, false)
+      selectedFriendId = null
+      return // No need to load messages for "Tournament"
     }
     document.getElementById('chat-user').textContent = friend.nickname
     selectedFriendId = friendNicknameToId.get(friend.nickname)
@@ -68,6 +98,7 @@ export async function chat(client) {
       if (response.is_blocked === false) {
         openWebSocket(response.id, selectedFriendNickname)
       }
+      loadFriends()
     }
     catch (error) {
       console.error('Error while loading the selected conversation:', error)
@@ -89,11 +120,11 @@ export async function chat(client) {
     messages.forEach((message) => {
       const div = document.createElement('div')
       if (message.sentFromUser.nickname !== friendNickname) {
-        div.textContent = `Me: ${message.messageContent}`
+        div.innerHTML = `Me: ${message.messageContent}`
         div.classList.add('sent-by-me')
       }
       else {
-        div.textContent = `${message.sentFromUser.nickname}: ${message.messageContent}`
+        div.innerHTML = `${message.sentFromUser.nickname}: ${message.messageContent}`
       }
       chatMessages.appendChild(div)
     })
@@ -117,10 +148,10 @@ export async function chat(client) {
         const div = document.createElement('div')
         senderNickname = friendIdToNickname.get(Number.parseInt(data.sender_id))
         if (senderNickname) {
-          div.textContent = `${senderNickname}: ${data.messageContent}`
+          div.innerHTML = `${senderNickname}: ${data.messageContent}`
         }
         else {
-          div.textContent = `Me: ${data.messageContent}`
+          div.innerHTML = `Me: ${data.messageContent}`
         }
         if (senderNickname !== friendNickname) {
           div.classList.add('sent-by-me')
@@ -228,12 +259,14 @@ export async function chat(client) {
     }
     const invite = await navigator.clipboard.readText()
     if (!/^https:\/\/transcendence\.fr\/pong\/remote\/join\/.+$/.test(invite)) {
-      // eslint-disable-next-line no-alert
-      alert('Please create a game before')
+      showAlert('Please create a game before', 'danger ')
       return
     }
     const holder = messageInput.value
-    messageInput.value = `Join me at Pong party! Here\'s the link: ${invite}`
+    const url = new URL(invite)
+    const path = url.pathname
+    const clickableInvite = `<a href="${path}" target="_blank">link</a>`
+    messageInput.value = `Join me at Pong party! Click on this ${clickableInvite}`
     const messageContent = messageInput.value.trim()
     if (messageContent && client.socket) {
       client.socket.send(JSON.stringify({ messageContent }))
